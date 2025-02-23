@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.network.mssql_proxy.v3;
+
+import "envoy/config/core/v3/base.proto";
+import "envoy/extensions/transport_sockets/tls/v3/tls.proto";
+
+import "udpa/annotations/status.proto";
+// import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.extensions.filters.network.mssql_proxy.v3";
+option java_outer_classname = "MssqlProxyProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/contrib/envoy/extensions/filters/network/mssql_proxy/v3;mssql_proxyv3";
+option (udpa.annotations.file_status).work_in_progress = true;
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+message MSSQLProxy {
+  // The human readable prefix to use when emitting :ref:`statistics
+  // <config_network_filters_mssql_proxy_stats>`.
+  string stat_prefix = 1 [(validate.rules).string = {min_len: 1}];
+
+  // when both downstream_tls_context and upstream_tls_context are set,
+  // the filter will terminate the SSL session initiated by a client
+  transport_sockets.tls.v3.DownstreamTlsContext downstream_tls_context = 2;
+  transport_sockets.tls.v3.UpstreamTlsContext upstream_tls_context = 3;
+
+  // when kerberos_keytab is set, the filter will authenticate kerberos tokens
+  config.core.v3.DataSource kerberos_keytab = 4;
+}

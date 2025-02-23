@@ -254,6 +254,8 @@ def envoy_dependencies(skip_targets = []):
     _com_github_wasmtime()
     _com_github_wasm_c_api()
 
+    _com_github_kerberos_krb5()
+
     switched_rules_by_language(
         name = "com_google_googleapis_imports",
         cc = True,
@@ -914,6 +916,12 @@ def _com_github_wasm_c_api():
     native.bind(
         name = "prefixed_wasmtime",
         actual = "@com_github_wasm_c_api//:wasmtime_lib",
+    )
+
+def _com_github_kerberos_krb5():
+    external_http_archive(
+        name = "com_github_kerberos_krb5",
+        build_file_content = BUILD_ALL_CONTENT,
     )
 
 def _intel_dlb():

@@ -1595,6 +1595,20 @@ REPOSITORY_LOCATIONS_SPEC = dict(
         extensions = ["envoy.compression.qatzip.compressor"],
         cpe = "N/A",
     ),
+    com_github_kerberos_krb5 = dict(
+        project_name = "KRB5",
+        project_desc = "MIT krb5 library",
+        project_url = "https://github.com/kerberos/krb5",
+        version = "1.21-final",
+        sha256 = "f0fe1d7c94a1437c921f599797bce103981301428b2abfa1a9494c5e984843a6",
+        strip_prefix = "krb5-krb5-{version}/src",
+        urls = ["https://github.com/krb5/krb5/archive/refs/tags/krb5-{version}.tar.gz"],
+        use_category = ["build", "dataplane_core", "controlplane"],
+        release_date = "2023-06-05",
+        cpe = "N/A",
+        license = "MIT",
+        license_url = "https://github.com/krb5/krb5/blob/krb5-{version}/NOTICE"
+    ),
 )
 
 def _compiled_protoc_deps(locations, versions):
