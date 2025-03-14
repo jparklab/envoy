@@ -8,6 +8,8 @@
 #include "source/common/config/utility.h"
 #include "envoy/server/transport_socket_config.h"
 
+#include "source/common/config/utility.h"
+
 #include "contrib/envoy/extensions/filters/network/mssql_proxy/v3/mssql_proxy.pb.h"
 #include "contrib/envoy/extensions/filters/network/mssql_proxy/v3/mssql_proxy.pb.validate.h"
 
@@ -19,15 +21,99 @@ namespace NetworkFilters {
 namespace MssqlProxy {
 
 /**
+ * All MssqlProxy stats. @see stats_macros.h
+ */
+#define ALL_MSSQL_PROXY_STATS(COUNTER)                                                             \
+  COUNTER(errors)                                                                                  \
+  COUNTER(sessions)                                                                                \
+  COUNTER(statements)                                                                              \
+  COUNTER(statements_insert)                                                                       \
+  COUNTER(statements_delete)                                                                       \
+  COUNTER(statements_update)                                                                       \
+  COUNTER(statements_select)                                                                       \
+  COUNTER(statements_other)                                                                        \
+  COUNTER(transactions)                                                                            \
+  COUNTER(transactions_commit)                                                                     \
+  COUNTER(transactions_rollback)
+
+struct MssqlProxyStats {
+  ALL_MSSQL_PROXY_STATS(GENERATE_COUNTER_STRUCT)
+};
+
+/**
  * Configuration for the MssqlProxy filter.
  */
-class FilterConfig {
+class FilterConfig : Logger::Loggable<Logger::Id::filter> {
 public:
   FilterConfig(const envoy::extensions::filters::network::mssql_proxy::v3::MSSQLProxy& proto_config,
-               Server::Configuration::FactoryContext& context) {
-    // TODO: implement
-    (void)proto_config;
-    (void)context;
+               Server::Configuration::FactoryContext& context)
+      : stats_(
+            generateStats(fmt::format("mssql.{}", proto_config.stat_prefix()), context.scope())) {
+
+    // BEGIN(experimental)
+    if (proto_config.has_downstream_tls_context()) {
+      auto& downstream_tls = proto_config.downstream_tls_context();
+      auto& tls_socket_config_factory = Config::Utility::getAndCheckFactoryByName<
+          Server::Configuration::DownstreamTransportSocketConfigFactory>(
+          "envoy.transport_sockets.tls");
+
+      auto tls_socket_factory = tls_socket_config_factory.createTransportSocketFactory(
+          downstream_tls, context.getTransportSocketFactoryContext(), {});
+
+      if (tls_socket_factory.ok()) {
+        downstream_transport_socket_factory_ = std::move(tls_socket_factory.value());
+        ENVOY_LOG(trace, "mssql_proxy: created downstream transport socket factory");
+      }
+    }
+
+    if (proto_config.has_upstream_tls_context()) {
+      auto& upstream_tls = proto_config.upstream_tls_context();
+      auto& tls_socket_config_factory = Config::Utility::getAndCheckFactoryByName<
+          Server::Configuration::UpstreamTransportSocketConfigFactory>(
+          "envoy.transport_sockets.tls");
+
+      auto tls_socket_factory = tls_socket_config_factory.createTransportSocketFactory(
+          upstream_tls, context.getTransportSocketFactoryContext());
+
+      if (tls_socket_factory.ok()) {
+        upstream_transport_socket_factory_ = std::move(tls_socket_factory.value());
+        ENVOY_LOG(trace, "mssql_proxy: created upstream transport socket factory");
+      }
+    }
+
+    // END(experimental)
+    /*
+    if (downstream_tls.has_value() && upstream_tls.has_value()) {
+      terminate_ssl_ = true;
+    }
+    */
+  }
+
+  MssqlProxyStats& stats() { return stats_; }
+  bool terminate_ssl() const { return terminate_ssl_; }
+
+  Network::TransportSocketPtr createDownstreamTransportSocket() {
+    if (downstream_transport_socket_factory_.get() == nullptr) {
+      return nullptr;
+    }
+    return downstream_transport_socket_factory_->createDownstreamTransportSocket();
+  }
+  Network::TransportSocketPtr createUpstreamTransportSocket() {
+    if (upstream_transport_socket_factory_.get() == nullptr) {
+      return nullptr;
+    }
+    return upstream_transport_socket_factory_->createTransportSocket(nullptr, nullptr);
+  }
+
+private:
+  MssqlProxyStats stats_;
+  bool terminate_ssl_;
+
+  Network::DownstreamTransportSocketFactoryPtr downstream_transport_socket_factory_;
+  Network::UpstreamTransportSocketFactoryPtr upstream_transport_socket_factory_;
+
+  MssqlProxyStats generateStats(const std::string& prefix, Stats::Scope& scope) {
+    return MssqlProxyStats{ALL_MSSQL_PROXY_STATS(POOL_COUNTER_PREFIX(scope, prefix))};
   }
 };
 
@@ -38,7 +124,11 @@ using FilterConfigSharedPtr = std::shared_ptr<FilterConfig>;
  */
 class Filter : public Network::Filter, DecoderCallbacks, Logger::Loggable<Logger::Id::filter> {
 public:
-  Filter(FilterConfigSharedPtr config) : config_(config) {}
+  Filter(FilterConfigSharedPtr config) : config_(config) {
+    decoder_ = std::make_unique<Decoder>(static_cast<DecoderCallbacks*>(this),
+                                         config->createDownstreamTransportSocket(),
+                                         config->createUpstreamTransportSocket());
+  }
   ~Filter() override = default;
 
   // Network::ReadFilter
@@ -55,8 +145,20 @@ public:
     write_callbacks_ = &callbacks;
   }
 
+  // DecoderCallbacks
+  Network::Connection& session() override { return read_callbacks_->connection(); }
+  void onPrelogin(const PreloginMessage& message) override;
+  void onPreloginResponse(const PreloginMessage& message) override;
+  void onLogin(const LoginMessage& message) override;
+
+  void onPreloginServerSSLPayload(Buffer::Instance& payload) override;
+  void onPreloginClientSSLPayload(Buffer::Instance& payload) override;
+  void onClientSSLPayload(Buffer::Instance& payload) override;
+  void onServerSSLPayload(Buffer::Instance& payload) override;
+
 private:
   FilterConfigSharedPtr config_;
+  std::unique_ptr<Decoder> decoder_;
 
   Network::ReadFilterCallbacks* read_callbacks_{};
   Network::WriteFilterCallbacks* write_callbacks_{};

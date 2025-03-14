@@ -6,38 +6,155 @@
 
 #include "source/common/buffer/buffer_impl.h"
 #include "source/common/common/logger.h"
+#include "envoy/network/io_handle.h"
+#include "source/extensions/io_socket/user_space/io_handle_impl.h"
 
 // for ssl
 #include "openssl/md5.h"
 #include "openssl/ssl.h"
+
+#include "mssql_messages.h"
 
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
 namespace MssqlProxy {
 
-/**
- * Base class for all TDS messages
- *
- * References
- *  https://github.com/denisenkom/go-mssqldb/blob/master/tds.go
- *    probably most recent and up to date reference..
- *  https://klonkers.blogspot.com/2015/01/making-something-useful-out-of-ms-tds.html
- *  https://www.freetds.org/tds.html
- *  https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/9b4a463c-2634-4a4b-ac35-bebfff2fb0f7
- */
-class Message {};
-
-class PreloginMessage : public Message {};
-
-class LoginMessage : public Message {};
-
 class DecoderCallbacks {
 public:
   virtual ~DecoderCallbacks() = default;
+
+  virtual Network::Connection& session() PURE;
+
+  virtual void onPrelogin(const PreloginMessage& message) PURE;
+  virtual void onPreloginResponse(const PreloginMessage& message) PURE;
+  virtual void onLogin(const LoginMessage& message) PURE;
+
+  // called for SSL traffic
+  virtual void onPreloginServerSSLPayload(Buffer::Instance& payload) PURE;
+  virtual void onPreloginClientSSLPayload(Buffer::Instance& payload) PURE;
+  virtual void onClientSSLPayload(Buffer::Instance& payload) PURE;
+  virtual void onServerSSLPayload(Buffer::Instance& payload) PURE;
 };
 
-class Decoder : Logger::Loggable<Logger::Id::filter> {};
+class TLSSocketPipe : public Network::TransportSocketCallbacks,
+                      Logger::Loggable<Logger::Id::filter> {
+public:
+  TLSSocketPipe(DecoderCallbacks* callbacks) : callbacks_(callbacks) {
+    auto p = IoSocket::UserSpace::IoHandleFactory::createIoHandlePair();
+    from_rawsocket_ = std::move(p.first);
+    to_rawsocket_ = std::move(p.second);
+  }
+
+  bool connected() { return connected_; }
+
+  Api::IoCallUint64Result fromRawSocket(Buffer::Instance& buffer) {
+    return from_rawsocket_->write(buffer);
+  }
+  Api::IoCallUint64Result toRawSocket(Buffer::Instance& buffer,
+                                      absl::optional<uint64_t> max_length) {
+    return from_rawsocket_->read(buffer, max_length);
+  }
+
+  // fields for TransportSocketCallbacks
+  Network::IoHandle& ioHandle() override {
+    ENVOY_LOG(trace, "mssql_proxy: ioHandle() called");
+    return *to_rawsocket_;
+  }
+
+  const Network::IoHandle& ioHandle() const override {
+    ENVOY_LOG(trace, "mssql_proxy: ioHandle() const called");
+    return *to_rawsocket_;
+  }
+  Network::Connection& connection() override { return callbacks_->session(); }
+
+  void raiseEvent(Network::ConnectionEvent event) override {
+    switch (event) {
+    case Network::ConnectionEvent::Connected:
+      ENVOY_LOG(trace, "mssql_proxy: raiseEvent(Connected) called");
+      connected_ = true;
+      break;
+    default:
+      break;
+    }
+  }
+
+  // should read buffer be drained?
+  bool shouldDrainReadBuffer() override {
+    // we originally used false
+    return true;
+  }
+  void setTransportSocketIsReadable() override {
+    // TODO
+    // PANIC("setTransportSocketIsReadable not implmented");
+  }
+  void flushWriteBuffer() override { PANIC("flushWriteBuffer not implemented"); }
+
+private:
+  DecoderCallbacks* callbacks_;
+  IoSocket::UserSpace::IoHandleImplPtr from_rawsocket_;
+  IoSocket::UserSpace::IoHandleImplPtr to_rawsocket_;
+
+  bool connected_{false};
+};
+
+using TLSSocketPipePtr = std::unique_ptr<TLSSocketPipe>;
+
+class Decoder : Logger::Loggable<Logger::Id::filter> {
+public:
+  enum class Result : uint8_t {
+    NeedMoreData = 0, // Decoder needs more data to process the message.
+    PassThrough,      // Decoder processed the message and the message can be forwarded to the next
+                      // filter
+    Consumed,    // Decoder processed the message and the message should not be forwarded to the
+                 // next filter
+    HasMoreData, // Decoder processed the message and there is more data to process
+  };
+
+  enum class SessionState : uint8_t {
+    Init = 0,
+  };
+
+  enum class SSLRecordType : uint8_t {
+    CHANGE_CIPHER_SPEC = 20, // 0x14
+    ALERT = 21,              // 0x15
+    HANDSHAKE = 22,          // 0x16
+    APPLICATION_DATA = 23,   // 0x17
+    HEARTBEAT = 24,          // 0x18
+  };
+
+  constexpr static uint8_t MinSSLRecordType =
+      static_cast<uint8_t>(SSLRecordType::CHANGE_CIPHER_SPEC);
+  constexpr static uint8_t MaxSSLRecordType = static_cast<uint8_t>(SSLRecordType::HEARTBEAT);
+
+  Decoder(DecoderCallbacks* callbacks, Network::TransportSocketPtr downstream_tls_socket,
+          Network::TransportSocketPtr upstream_tls_socket);
+  virtual ~Decoder() = default;
+
+  Result onData(Buffer::Instance& data);
+  Result onWrite(Buffer::Instance& data);
+
+private:
+  DecoderCallbacks* callbacks_;
+
+  Buffer::OwnedImpl read_buffer_;
+  Buffer::OwnedImpl write_buffer_;
+
+  Buffer::OwnedImpl read_payload_;
+  Buffer::OwnedImpl write_payload_;
+  bool continue_ssl_payload_{false};
+
+  Buffer::OwnedImpl pending_read_payload_;
+
+  Network::TransportSocketPtr downstream_tls_socket_;
+  Network::TransportSocketPtr upstream_tls_socket_;
+
+  TLSSocketPipePtr downstream_tls_socket_pipe_;
+  TLSSocketPipePtr upstream_tls_socket_pipe_;
+
+  Result decode(Buffer::Instance& data, bool from_client);
+  Result decodeSSL(Buffer::Instance& data);
+};
 
 } // namespace MssqlProxy
 } // namespace NetworkFilters

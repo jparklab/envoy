@@ -20,6 +20,7 @@ envoy_cc_library(
     hdrs = [
         "mssql_filter.h",
         "mssql_codec.h",
+        "mssql_messages.h",
     ],
     deps = [
         "//envoy/network:filter_interface",
@@ -33,6 +34,7 @@ envoy_cc_library(
         "//source/common/tls:ssl_handshaker_lib",
         "//source/common/tls:ssl_socket_base",
         "//source/extensions/filters/network:well_known_names",
+        "//source/extensions/io_socket/user_space:io_handle_impl_lib",
         "@envoy_api//contrib/envoy/extensions/filters/network/mssql_proxy/v3:pkg_cc_proto",
         ":krb5",
 
