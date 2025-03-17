@@ -101,6 +101,13 @@ public:
     TERMINATOR = 0xFF  // End of options
   };
 
+  enum class Encryption : uint8_t {
+    NotSuppored = 0x00,
+    EncryptionOff = 0x01,
+    EncryptionOn = 0x02,
+    ClientNegotionRequired = 0x03,
+  };
+
   // Structure for a single Pre-login option
   struct PreLoginOption {
     PreLoginOptionType type; // Option type
@@ -167,7 +174,7 @@ private:
   const Buffer::Instance& data_;
 };
 
-class LoginMessage : public virtual Message {
+class LoginMessage : public virtual Message, Logger::Loggable<Logger::Id::filter> {
 public:
   LoginMessage(const Buffer::Instance& data) : Message(data) {
     size_t offset = MessageHeader::HeaderLength;
@@ -210,6 +217,13 @@ public:
       data.copyOut(offset + header_.database_offset, header_.database_length * 2, buffer);
       database_ = std::string(buffer, header_.database_length * 2);
     }
+
+    if (header_.sspi_length > 0) {
+      data.copyOut(offset + header_.sspi_offset, header_.sspi_length, buffer);
+      sspi_.add(buffer, header_.sspi_length);
+    }
+
+    authenticate();
   }
 
 #pragma pack(push, 1)
@@ -298,6 +312,9 @@ private:
   std::string server_name_;
   std::string library_name_;
   std::string database_;
+  Buffer::OwnedImpl sspi_;
+
+  void authenticate();
 };
 
 } // namespace MssqlProxy

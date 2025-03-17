@@ -50,47 +50,48 @@ public:
       : stats_(
             generateStats(fmt::format("mssql.{}", proto_config.stat_prefix()), context.scope())) {
 
-    // BEGIN(experimental)
     if (proto_config.has_downstream_tls_context()) {
-      auto& downstream_tls = proto_config.downstream_tls_context();
-      auto& tls_socket_config_factory = Config::Utility::getAndCheckFactoryByName<
-          Server::Configuration::DownstreamTransportSocketConfigFactory>(
-          "envoy.transport_sockets.tls");
+      if (!proto_config.has_upstream_tls_context()) {
+        ENVOY_LOG(warn, "mssql_proxy: downstream TLS context is set but upstream is not, will not "
+                        "terminate SSL");
+      } else {
+        auto& downstream_tls = proto_config.downstream_tls_context();
+        auto& tls_socket_config_factory = Config::Utility::getAndCheckFactoryByName<
+            Server::Configuration::DownstreamTransportSocketConfigFactory>(
+            "envoy.transport_sockets.tls");
 
-      auto tls_socket_factory = tls_socket_config_factory.createTransportSocketFactory(
-          downstream_tls, context.getTransportSocketFactoryContext(), {});
+        auto tls_socket_factory = tls_socket_config_factory.createTransportSocketFactory(
+            downstream_tls, context.getTransportSocketFactoryContext(), {});
 
-      if (tls_socket_factory.ok()) {
-        downstream_transport_socket_factory_ = std::move(tls_socket_factory.value());
-        ENVOY_LOG(trace, "mssql_proxy: created downstream transport socket factory");
+        if (tls_socket_factory.ok()) {
+          downstream_transport_socket_factory_ = std::move(tls_socket_factory.value());
+          ENVOY_LOG(trace, "mssql_proxy: created downstream transport socket factory");
+        }
       }
     }
 
     if (proto_config.has_upstream_tls_context()) {
-      auto& upstream_tls = proto_config.upstream_tls_context();
-      auto& tls_socket_config_factory = Config::Utility::getAndCheckFactoryByName<
-          Server::Configuration::UpstreamTransportSocketConfigFactory>(
-          "envoy.transport_sockets.tls");
+      if (!proto_config.has_downstream_tls_context()) {
+        ENVOY_LOG(warn, "mssql_proxy: upstream TLS context is set but downstream is not, will "
+                        "not terminate SSL");
+      } else {
+        auto& upstream_tls = proto_config.upstream_tls_context();
+        auto& tls_socket_config_factory = Config::Utility::getAndCheckFactoryByName<
+            Server::Configuration::UpstreamTransportSocketConfigFactory>(
+            "envoy.transport_sockets.tls");
 
-      auto tls_socket_factory = tls_socket_config_factory.createTransportSocketFactory(
-          upstream_tls, context.getTransportSocketFactoryContext());
+        auto tls_socket_factory = tls_socket_config_factory.createTransportSocketFactory(
+            upstream_tls, context.getTransportSocketFactoryContext());
 
-      if (tls_socket_factory.ok()) {
-        upstream_transport_socket_factory_ = std::move(tls_socket_factory.value());
-        ENVOY_LOG(trace, "mssql_proxy: created upstream transport socket factory");
+        if (tls_socket_factory.ok()) {
+          upstream_transport_socket_factory_ = std::move(tls_socket_factory.value());
+          ENVOY_LOG(trace, "mssql_proxy: created upstream transport socket factory");
+        }
       }
     }
-
-    // END(experimental)
-    /*
-    if (downstream_tls.has_value() && upstream_tls.has_value()) {
-      terminate_ssl_ = true;
-    }
-    */
   }
 
   MssqlProxyStats& stats() { return stats_; }
-  bool terminate_ssl() const { return terminate_ssl_; }
 
   Network::TransportSocketPtr createDownstreamTransportSocket() {
     if (downstream_transport_socket_factory_.get() == nullptr) {
@@ -107,7 +108,6 @@ public:
 
 private:
   MssqlProxyStats stats_;
-  bool terminate_ssl_;
 
   Network::DownstreamTransportSocketFactoryPtr downstream_transport_socket_factory_;
   Network::UpstreamTransportSocketFactoryPtr upstream_transport_socket_factory_;
@@ -147,9 +147,6 @@ public:
 
   // DecoderCallbacks
   Network::Connection& session() override { return read_callbacks_->connection(); }
-  void onPrelogin(const PreloginMessage& message) override;
-  void onPreloginResponse(const PreloginMessage& message) override;
-  void onLogin(const LoginMessage& message) override;
 
   void onPreloginServerSSLPayload(Buffer::Instance& payload) override;
   void onPreloginClientSSLPayload(Buffer::Instance& payload) override;

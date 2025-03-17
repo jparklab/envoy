@@ -26,10 +26,6 @@ public:
 
   virtual Network::Connection& session() PURE;
 
-  virtual void onPrelogin(const PreloginMessage& message) PURE;
-  virtual void onPreloginResponse(const PreloginMessage& message) PURE;
-  virtual void onLogin(const LoginMessage& message) PURE;
-
   // called for SSL traffic
   virtual void onPreloginServerSSLPayload(Buffer::Instance& payload) PURE;
   virtual void onPreloginClientSSLPayload(Buffer::Instance& payload) PURE;
@@ -75,18 +71,15 @@ public:
       connected_ = true;
       break;
     default:
+      ENVOY_LOG(trace, "mssql_proxy: raiseEvent({}) called", static_cast<int>(event));
       break;
     }
   }
 
   // should read buffer be drained?
-  bool shouldDrainReadBuffer() override {
-    // we originally used false
-    return true;
-  }
+  bool shouldDrainReadBuffer() override { return false; }
   void setTransportSocketIsReadable() override {
-    // TODO
-    // PANIC("setTransportSocketIsReadable not implmented");
+    ENVOY_LOG(trace, "mssql_proxy: setTransportSocketIsReadable called");
   }
   void flushWriteBuffer() override { PANIC("flushWriteBuffer not implemented"); }
 
@@ -113,6 +106,9 @@ public:
 
   enum class SessionState : uint8_t {
     Init = 0,
+    Handshake, // SSL handshake in progress
+    EncryptionOn,
+    EncryptionOff,
   };
 
   enum class SSLRecordType : uint8_t {
@@ -131,10 +127,15 @@ public:
           Network::TransportSocketPtr upstream_tls_socket);
   virtual ~Decoder() = default;
 
-  Result onData(Buffer::Instance& data);
-  Result onWrite(Buffer::Instance& data);
+  Network::FilterStatus onData(Buffer::Instance& data);
+  Network::FilterStatus onWrite(Buffer::Instance& data);
 
 private:
+  SessionState client_session_state_{SessionState::Init};
+  SessionState server_session_state_{SessionState::Init};
+
+  bool upstream_encrypted_{false};
+
   DecoderCallbacks* callbacks_;
 
   Buffer::OwnedImpl read_buffer_;
@@ -152,8 +153,8 @@ private:
   TLSSocketPipePtr downstream_tls_socket_pipe_;
   TLSSocketPipePtr upstream_tls_socket_pipe_;
 
-  Result decode(Buffer::Instance& data, bool from_client);
-  Result decodeSSL(Buffer::Instance& data);
+  Result decodeClientMessage(Buffer::Instance& data);
+  Result decodeServerMessage(Buffer::Instance& data);
 };
 
 } // namespace MssqlProxy

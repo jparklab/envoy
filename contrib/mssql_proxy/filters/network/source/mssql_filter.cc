@@ -16,67 +16,28 @@ Network::FilterStatus Filter::onData(Buffer::Instance& data, bool) {
   ENVOY_CONN_LOG(trace, "mssql_proxy: received {} bytes from client", read_callbacks_->connection(),
                  data.length());
 
-  Decoder::Result result = decoder_->onData(data);
+  Network::FilterStatus result = decoder_->onData(data);
 
-  switch (result) {
-  case Decoder::Result::NeedMoreData:
-    // do not forward data until we have enough to process
+  if (result == Network::FilterStatus::StopIteration) {
+    // ensure all data is consumed
     data.drain(data.length());
-    return Network::FilterStatus::StopIteration;
-  case Decoder::Result::PassThrough:
-    return Network::FilterStatus::Continue;
-  case Decoder::Result::Consumed:
-    data.drain(data.length());
-    return Network::FilterStatus::StopIteration;
-  default:
-    break;
   }
 
-  return Network::FilterStatus::Continue;
+  return result;
 }
 
 Network::FilterStatus Filter::onWrite(Buffer::Instance& data, bool) {
   ENVOY_CONN_LOG(trace, "mssql_proxy: received {} bytes from server", read_callbacks_->connection(),
                  data.length());
 
-  Decoder::Result result = decoder_->onWrite(data);
+  Network::FilterStatus result = decoder_->onWrite(data);
 
-  switch (result) {
-  case Decoder::Result::NeedMoreData:
-    // FIXME: Filter::onUpstreamData() requires the buffer to be drained
-    // [2025-03-12 12:16:02.447][2052380][critical][backtrace] [./source/server/backtrace.h:127]
-    // Caught Aborted, suspect faulting address 0x3e8001f5025 [2025-03-12
-    // 12:16:02.447][2052380][critical][backtrace] [./source/server/backtrace.h:111] Backtrace (use
-    // tools/stack_decode.py to get line numbers): [2025-03-12
-    // 12:16:02.447][2052380][critical][backtrace] [./source/server/backtrace.h:112] Envoy version:
-    // 3cc95445c9cf4966283c2a8704f9cdb185f0cd88/1.33.0-dev/Modified/DEBUG/BoringSSL [2025-03-12
-    // 12:16:02.447][2052380][critical][backtrace] [./source/server/backtrace.h:114] Address
-    // mapping: 5fb73bd64000-5fb744b75000
-    // /home/jpark/.cache/bazel/_bazel_jpark/ace7b8de40762dd92ed362808811797d/execroot/envoy/bazel-out/k8-fastbuild/bin/contrib/exe/envoy-static
-    // do not forward data until we have enough to process
-    data.drain(data.length());
-    return Network::FilterStatus::StopIteration;
-  case Decoder::Result::PassThrough:
-    return Network::FilterStatus::Continue;
-  case Decoder::Result::Consumed:
-    data.drain(data.length());
-    return Network::FilterStatus::StopIteration;
-  default:
-    break;
-  }
-
-  /*
   if (result == Network::FilterStatus::StopIteration) {
     data.drain(data.length());
   }
-  */
 
-  return Network::FilterStatus::Continue;
+  return result;
 }
-
-void Filter::onPrelogin(const PreloginMessage& message) { (void)message; }
-void Filter::onPreloginResponse(const PreloginMessage& message) { (void)message; }
-void Filter::onLogin(const LoginMessage& message) { (void)message; }
 
 void Filter::onPreloginServerSSLPayload(Buffer::Instance& payload) {
   char header[MessageHeader::HeaderLength];

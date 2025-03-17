@@ -16,6 +16,7 @@ envoy_cc_library(
     srcs = [
         "mssql_filter.cc",
         "mssql_codec.cc",
+        "mssql_krb5.cc",
     ],
     hdrs = [
         "mssql_filter.h",
